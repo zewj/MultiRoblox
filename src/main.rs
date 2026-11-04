@@ -3,6 +3,7 @@
 //! and give the user a tidy dashboard to watch and manage those windows.
 
 mod app;
+mod doctor;
 mod monitor;
 mod platform;
 mod settings;
@@ -17,10 +18,12 @@ const HELP: &str = "MultiRoblox
 
 USAGE:
     MultiRoblox.exe [--minimized] [--tab dashboard|instances|settings|log]
+    MultiRoblox.exe --doctor
 
 OPTIONS:
     --minimized    Start hidden in the system tray (used by the autostart entry)
     --tab <name>   Open on a specific tab
+    --doctor       Run a quick diagnostic without the GUI and open the report
     -h, --help     Show this help
 ";
 
@@ -40,6 +43,25 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{HELP}");
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--doctor") {
+        let text = doctor::report();
+        print!("{text}");
+        match doctor::write_report(&text) {
+            Ok(path) => {
+                if platform::shell_open(&path.display().to_string()).is_err() {
+                    platform::show_message(
+                        "MultiRoblox doctor",
+                        &format!("Report written to\n{}", path.display()),
+                    );
+                }
+            }
+            Err(e) => platform::show_message(
+                "MultiRoblox doctor",
+                &format!("Couldn't write the report: {e}\n\n{text}"),
+            ),
+        }
         return Ok(());
     }
     let minimized_flag = args

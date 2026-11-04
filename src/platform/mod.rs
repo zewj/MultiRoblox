@@ -47,6 +47,13 @@ pub enum LockError {
     Os(String),
 }
 
+/// CPU priority class we may assign to a Roblox process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Priority {
+    Normal,
+    BelowNormal,
+}
+
 pub fn cpu_count() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
