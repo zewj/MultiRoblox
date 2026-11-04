@@ -1,7 +1,7 @@
 //! Background thread: owns the Roblox singleton lock, samples the running
 //! Roblox processes once a second and keeps an activity log.
 
-use crate::platform::{self, LockError, LockGuard};
+use crate::platform::{self, LockError, LockGuard, Priority};
 use chrono::{DateTime, Local};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -55,6 +55,7 @@ pub struct Shared {
     /// Settings mirrored for the worker thread.
     pub tag_titles: bool,
     pub exit_when_done: bool,
+    pub deprioritize_background: bool,
     /// Set by the worker when the app should quit (exit_when_done fired).
     pub exit_requested: bool,
     pub ever_seen_roblox: bool,
@@ -91,6 +92,7 @@ impl Monitor {
             log: VecDeque::new(),
             tag_titles: false,
             exit_when_done: false,
+            deprioritize_background: false,
             exit_requested: false,
             ever_seen_roblox: false,
             peak_instances: 0,
@@ -146,6 +148,8 @@ fn worker(ctx: egui::Context, shared: Arc<Mutex<Shared>>, poke_rx: Receiver<()>)
     let mut prev_cpu: HashMap<u32, (Duration, Instant)> = HashMap::new();
     let mut ordinals: HashMap<u32, u32> = HashMap::new();
     let mut last_lock_error: Option<LockError> = None;
+    let mut priorities: HashMap<u32, Priority> = HashMap::new();
+    let mut priority_warned = false;
     let ncpu = platform::cpu_count().max(1) as f32;
 
     loop {
@@ -200,6 +204,7 @@ fn worker(ctx: egui::Context, shared: Arc<Mutex<Shared>>, poke_rx: Receiver<()>)
         for (pid, _) in &gone {
             ordinals.remove(pid);
             prev_cpu.remove(pid);
+            priorities.remove(pid);
         }
         // Newcomers get the lowest free number, oldest process first.
         let mut newcomers: Vec<&platform::ProcessInfo> = procs
@@ -279,6 +284,41 @@ fn worker(ctx: egui::Context, shared: Arc<Mutex<Shared>>, poke_rx: Receiver<()>)
                             platform::set_window_title(hwnd, "Roblox");
                             inst.title = "Roblox".into();
                         }
+                    }
+                }
+            }
+            // --- background priority ---------------------------------------
+            if s.deprioritize_background {
+                if let Some(fg) =
+                    platform::foreground_pid().filter(|fg| instances.iter().any(|i| i.pid == *fg))
+                {
+                    for inst in &instances {
+                        let want = if inst.pid == fg {
+                            Priority::Normal
+                        } else {
+                            Priority::BelowNormal
+                        };
+                        if priorities.get(&inst.pid) != Some(&want) {
+                            match platform::set_process_priority(inst.pid, want) {
+                                Ok(()) => {
+                                    priorities.insert(inst.pid, want);
+                                }
+                                Err(e) if !priority_warned => {
+                                    priority_warned = true;
+                                    s.log(
+                                        Level::Warn,
+                                        format!("Couldn't change a Roblox priority: {e}"),
+                                    );
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    }
+                }
+            } else if !priorities.is_empty() {
+                for (pid, p) in priorities.drain() {
+                    if p == Priority::BelowNormal {
+                        let _ = platform::set_process_priority(pid, Priority::Normal);
                     }
                 }
             }

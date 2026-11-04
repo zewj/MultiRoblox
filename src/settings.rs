@@ -21,6 +21,8 @@ pub struct Settings {
     /// Join links go through the registered `roblox://` handler (Bloxstrap friendly)
     /// instead of starting RobloxPlayerBeta.exe directly.
     pub use_protocol_handler: bool,
+    /// Drop CPU priority of Roblox windows that aren't in the foreground.
+    pub deprioritize_background: bool,
     /// Pause between launches when starting several instances at once.
     pub launch_delay_ms: u64,
     /// Last value of the "launch N instances" spinner.
@@ -39,6 +41,7 @@ impl Default for Settings {
             exit_with_roblox: false,
             tag_window_titles: false,
             use_protocol_handler: true,
+            deprioritize_background: false,
             launch_delay_ms: 2000,
             launch_count: 1,
             last_join_input: String::new(),

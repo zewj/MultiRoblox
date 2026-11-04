@@ -27,8 +27,13 @@ multi-instance tool uses. Around it there is a proper dashboard:
   specific-server link, a private-server link or a raw `roblox://` deep link.
 - **Instances table** with PID, window title, memory, CPU, uptime, and
   **Focus** / **Close** buttons per instance, plus a two-step **Close all**.
+- **Tile windows**: one click arranges every Roblox window in a grid on your
+  monitor.
 - **Optional window numbering**: rename windows to `Roblox #1`, `Roblox #2`, …
   so you can tell them apart in the taskbar.
+- **Lower priority of background instances** (optional): the window you're
+  playing keeps normal CPU priority, the rest drop to below normal until you
+  switch to them.
 - **Tray icon** with a menu (open, launch, close all, quit). Closing the window
   hides to the tray so the lock stays held.
 - **Start with Windows**, start minimised, always-on-top, and
@@ -78,7 +83,12 @@ Command line flags:
 
 ```
 MultiRoblox.exe [--minimized] [--tab dashboard|instances|settings|log]
+MultiRoblox.exe --doctor
 ```
+
+`--doctor` runs a ten-second check without the GUI (lock, Roblox processes,
+client location, `roblox://` handlers, autostart, settings) and opens the
+report in Notepad. Paste that report into an issue if something doesn't work.
 
 Settings live in `%APPDATA%\MultiRoblox\settings.json`.
 

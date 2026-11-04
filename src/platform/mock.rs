@@ -1,7 +1,7 @@
 //! Simulated backend for non-Windows builds (development, CI, screenshots).
 #![allow(dead_code)]
 
-use super::{LockError, ProcessInfo};
+use super::{LockError, Priority, ProcessInfo};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -135,3 +135,23 @@ pub fn claim_tool_instance() -> bool {
 pub fn signal_existing_instance() {}
 
 pub fn spawn_show_listener(_on_show: impl Fn() + Send + 'static) {}
+
+pub fn tile_windows(hwnds: &[isize]) -> Result<usize, String> {
+    Ok(hwnds.len())
+}
+
+pub fn foreground_pid() -> Option<u32> {
+    None
+}
+
+pub fn set_process_priority(_pid: u32, _priority: Priority) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn protocol_handler_command(_scheme: &str) -> Option<String> {
+    None
+}
+
+pub fn show_message(title: &str, text: &str) {
+    println!("[{title}] {text}");
+}

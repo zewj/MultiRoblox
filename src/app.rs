@@ -349,6 +349,25 @@ impl App {
         self.monitor.poke();
     }
 
+    fn tile(&mut self, instances: &[Instance]) {
+        let hwnds: Vec<isize> = instances.iter().filter_map(|i| i.hwnd).collect();
+        if hwnds.is_empty() {
+            self.toast("No Roblox windows to tile yet.", theme::TEXT_MUTED);
+            return;
+        }
+        match platform::tile_windows(&hwnds) {
+            Ok(n) => {
+                self.monitor
+                    .log(Level::Info, format!("Tiled {n} Roblox window(s)"));
+                self.toast(format!("Tiled {n} window(s)."), theme::TEXT_MUTED);
+            }
+            Err(e) => {
+                self.monitor.log(Level::Error, e.clone());
+                self.toast(e, theme::DANGER);
+            }
+        }
+    }
+
     fn focus(&mut self, inst: &Instance) {
         match inst.hwnd {
             Some(h) => {
@@ -357,6 +376,19 @@ impl App {
                 }
             }
             None => self.toast("That instance hasn't opened a window yet.", theme::WARN),
+        }
+    }
+
+    fn tile_button(&mut self, ui: &mut egui::Ui, instances: &[Instance]) {
+        let can = instances.iter().any(|i| i.hwnd.is_some());
+        let resp = ui
+            .add_enabled_ui(can, |ui| {
+                widgets::small_button(ui, "Tile windows", ButtonKind::Ghost)
+            })
+            .inner
+            .on_hover_text("Arrange every Roblox window in a grid on one monitor");
+        if resp.clicked() {
+            self.tile(instances);
         }
     }
 
@@ -711,6 +743,7 @@ impl App {
                 widgets::section(ui, "Instances", "Everything Roblox has open right now.");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     self.kill_all_button(ui, snap.instances.len());
+                    self.tile_button(ui, &snap.instances);
                     if widgets::small_button(ui, "Refresh", ButtonKind::Ghost).clicked() {
                         self.monitor.poke();
                     }
@@ -741,6 +774,7 @@ impl App {
                     if widgets::small_button(ui, "Launch another", ButtonKind::Primary).clicked() {
                         self.launch(1);
                     }
+                    self.tile_button(ui, &snap.instances);
                     if widgets::small_button(ui, "Refresh", ButtonKind::Ghost).clicked() {
                         self.monitor.poke();
                     }
@@ -1054,6 +1088,20 @@ impl App {
             }
             widgets::divider(ui);
 
+            let mut v = self.settings.deprioritize_background;
+            if widgets::setting_row(
+                ui,
+                "Lower priority of background instances",
+                "The Roblox window you're playing keeps normal CPU priority; the others drop to below normal until you switch to them.",
+                &mut v,
+            ) {
+                self.settings.deprioritize_background = v;
+                self.settings_dirty = true;
+                self.monitor.shared.lock().unwrap().deprioritize_background = v;
+                self.monitor.poke();
+            }
+            widgets::divider(ui);
+
             let mut v = self.settings.use_protocol_handler;
             if widgets::setting_row(
                 ui,
@@ -1132,6 +1180,7 @@ impl App {
                             let mut s = self.monitor.shared.lock().unwrap();
                             s.tag_titles = false;
                             s.exit_when_done = false;
+                            s.deprioritize_background = false;
                         }
                         ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
                         self.toast("Settings reset to defaults.", theme::TEXT_MUTED);

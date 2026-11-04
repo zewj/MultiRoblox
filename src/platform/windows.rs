@@ -1,12 +1,15 @@
 //! Win32 backend: the singleton lock, process discovery, window control,
 //! launching the client, autostart and single-instance signalling.
 
-use super::{LockError, ProcessInfo, ROBLOX_EVENT, ROBLOX_MUTEX};
+use super::{LockError, Priority, ProcessInfo, ROBLOX_EVENT, ROBLOX_MUTEX};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 use windows_sys::Win32::System::ProcessStatus::*;
 use windows_sys::Win32::System::Registry::*;
@@ -508,4 +511,163 @@ pub fn spawn_show_listener(on_show: impl Fn() + Send + 'static) {
             }
         })
         .ok();
+}
+
+/// Arrange the given windows in a grid on the monitor that holds the first one.
+pub fn tile_windows(hwnds: &[isize]) -> Result<usize, String> {
+    let n = hwnds.len();
+    if n == 0 {
+        return Ok(0);
+    }
+    let mut area = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: structs are sized before use; every handle is checked by the callee.
+    unsafe {
+        let monitor = MonitorFromWindow(hwnds[0] as HWND, MONITOR_DEFAULTTONEAREST);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if !monitor.is_null() && GetMonitorInfoW(monitor, &mut info) != 0 {
+            area = info.rcWork;
+        } else if SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            &mut area as *mut RECT as *mut core::ffi::c_void,
+            0,
+        ) == 0
+        {
+            return Err("Couldn't read the desktop work area".into());
+        }
+    }
+    let cols = (n as f64).sqrt().ceil().max(1.0) as i32;
+    let rows = (n as u32).div_ceil(cols as u32) as i32;
+    let cell_w = (area.right - area.left) / cols;
+    let cell_h = (area.bottom - area.top) / rows;
+    if cell_w < 200 || cell_h < 150 {
+        return Err("Too many windows to tile sensibly on this monitor".into());
+    }
+    let mut placed = 0;
+    for (i, &hwnd) in hwnds.iter().enumerate() {
+        let col = i as i32 % cols;
+        let row = i as i32 / cols;
+        let x = area.left + col * cell_w;
+        let y = area.top + row * cell_h;
+        // SAFETY: an invalid HWND makes these calls fail harmlessly.
+        unsafe {
+            let h = hwnd as HWND;
+            if IsWindow(h) == 0 {
+                continue;
+            }
+            if IsIconic(h) != 0 || IsZoomed(h) != 0 {
+                ShowWindow(h, SW_RESTORE);
+            }
+            if SetWindowPos(
+                h,
+                null_mut(),
+                x,
+                y,
+                cell_w,
+                cell_h,
+                SWP_NOZORDER | SWP_SHOWWINDOW,
+            ) != 0
+            {
+                placed += 1;
+            }
+        }
+    }
+    Ok(placed)
+}
+
+/// PID that owns the current foreground window.
+pub fn foreground_pid() -> Option<u32> {
+    // SAFETY: plain queries; a null HWND is handled.
+    unsafe {
+        let h = GetForegroundWindow();
+        if h.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, &mut pid);
+        (pid != 0).then_some(pid)
+    }
+}
+
+pub fn set_process_priority(pid: u32, priority: Priority) -> Result<(), String> {
+    let class = match priority {
+        Priority::Normal => NORMAL_PRIORITY_CLASS,
+        Priority::BelowNormal => BELOW_NORMAL_PRIORITY_CLASS,
+    };
+    // SAFETY: handle checked and closed.
+    unsafe {
+        let h = OpenProcess(PROCESS_SET_INFORMATION, 0, pid);
+        if h.is_null() {
+            return Err(format!(
+                "Couldn't open PID {pid} to change its priority ({})",
+                last_error()
+            ));
+        }
+        let ok = SetPriorityClass(h, class);
+        let err = last_error();
+        CloseHandle(h);
+        if ok == 0 {
+            Err(format!("SetPriorityClass failed for PID {pid} ({err})"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The command registered for a URL scheme such as `roblox` or `roblox-player`.
+pub fn protocol_handler_command(scheme: &str) -> Option<String> {
+    let sub = wide(&format!("{scheme}\\shell\\open\\command"));
+    let mut hkey: HKEY = null_mut();
+    // SAFETY: key handle validated and closed; buffer sized from the first query.
+    unsafe {
+        if RegOpenKeyExW(
+            HKEY_CLASSES_ROOT,
+            sub.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut hkey,
+        ) != ERROR_SUCCESS
+        {
+            return None;
+        }
+        let mut size = 0u32;
+        let mut ty = 0u32;
+        if RegQueryValueExW(hkey, null(), null(), &mut ty, null_mut(), &mut size) != ERROR_SUCCESS
+            || size == 0
+        {
+            RegCloseKey(hkey);
+            return None;
+        }
+        let mut buf = vec![0u16; size as usize / 2 + 1];
+        let rc = RegQueryValueExW(
+            hkey,
+            null(),
+            null(),
+            &mut ty,
+            buf.as_mut_ptr() as *mut u8,
+            &mut size,
+        );
+        RegCloseKey(hkey);
+        (rc == ERROR_SUCCESS).then(|| from_wide(&buf))
+    }
+}
+
+pub fn show_message(title: &str, text: &str) {
+    let t = wide(title);
+    let x = wide(text);
+    // SAFETY: NUL-terminated strings.
+    unsafe {
+        MessageBoxW(
+            null_mut(),
+            x.as_ptr(),
+            t.as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
+        );
+    }
 }
